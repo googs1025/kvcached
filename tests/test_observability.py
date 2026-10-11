@@ -371,12 +371,18 @@ def test_kv_cache_pool_snapshot_from_manager_like_object():
     assert data["mapped_bytes"] == 10 * 8 * (2 * 1024 * 1024) * 2
     assert data["reserved_mapped_bytes"] == 2 * 8 * (2 * 1024 * 1024) * 2
     assert data["total_mapped_bytes"] == 12 * 8 * (2 * 1024 * 1024) * 2
+    assert data["physical_virtual_ratio"] == (
+        data["total_mapped_bytes"] / data["virtual_total_bytes"]
+    )
     assert data["total_pages"] == 20
     assert data["free_pages"] == 10
     assert data["inuse_pages"] == 10
     assert data["reserved_pages"] == 2
     assert data["available_physical_pages"] == 4
     assert data["effective_free_pages"] == 6
+    assert data["page_utilization"] == 10 / 20
+    assert data["block_utilization"] == 16 / 128
+    assert data["physical_free_bytes"] == 6 * 8 * (2 * 1024 * 1024) * 2
     assert data["resize_target_bytes"] == 0
     # A manager-like object without a lifecycle reports no phase.
     assert data["lifecycle_phase"] is None
@@ -406,7 +412,40 @@ def test_pool_snapshot_reports_allocator_health_details():
     assert data["lifecycle_error"] == "map transaction aborted"
     assert data["reserved_mapped_bytes"] is None
     assert data["total_mapped_bytes"] is None
+    assert data["physical_virtual_ratio"] is None
     json.dumps(data)
+
+
+def test_pool_snapshot_derived_ratios_are_none_for_zero_denominators():
+    class EmptyPageAllocator(FakePageAllocator):
+        def get_page_state(self):
+            return {
+                "total_pages": 0,
+                "free_pages": 0,
+                "inuse_pages": 0,
+                "reserved_pages": 0,
+            }
+
+        def get_avail_physical_pages(self):
+            return 0
+
+    class EmptyManager(FakeManager):
+        num_blocks = 0
+        mem_size = 0
+        page_allocator = EmptyPageAllocator()
+
+        def available_size(self):
+            return 0
+
+        def _get_num_alloced_blocks(self):
+            return 0
+
+    data = build_kv_cache_pool_snapshot(EmptyManager()).to_dict()
+
+    assert data["physical_virtual_ratio"] is None
+    assert data["page_utilization"] is None
+    assert data["block_utilization"] is None
+    assert data["physical_free_bytes"] == 0
 
 
 def test_pool_snapshot_omits_mapped_totals_after_failed_unmap():

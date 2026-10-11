@@ -34,6 +34,12 @@ def _int_attr(obj: Any, name: str) -> Optional[int]:
     return int(value)
 
 
+def _ratio(numerator: Optional[int], denominator: Optional[int]) -> Optional[float]:
+    if numerator is None or denominator is None or denominator == 0:
+        return None
+    return numerator / denominator
+
+
 @dataclass(frozen=True)
 class RuntimeSnapshot:
     """Runtime integration state for an engine shim."""
@@ -137,6 +143,10 @@ class KVCachePoolSnapshot:
     lifecycle_error: Optional[str] = None
     reserved_mapped_bytes: Optional[int] = None
     total_mapped_bytes: Optional[int] = None
+    physical_virtual_ratio: Optional[float] = None
+    page_utilization: Optional[float] = None
+    block_utilization: Optional[float] = None
+    physical_free_bytes: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -424,6 +434,7 @@ def build_kv_cache_pool_snapshot(
     # KV buffers of one layer.
     virtual_bytes_per_buffer = _int_attr(manager, "mem_size") or 0
     virtual_per_layer_bytes = virtual_bytes_per_buffer * num_kv_buffers
+    virtual_total_bytes = virtual_per_layer_bytes * num_layers
     block_size_bytes = _int_attr(manager, "block_mem_size") or 0
     bytes_per_block = block_size_bytes * num_layers * num_kv_buffers
     # available_size() reads three allocator getters at three separate instants
@@ -447,6 +458,7 @@ def build_kv_cache_pool_snapshot(
         available_blocks = 0
     allocated_blocks = max(int(manager._get_num_alloced_blocks()), 0)
     reserved_blocks = len(getattr(manager, "reserved_blocks", []))
+    total_blocks = _int_attr(manager, "num_blocks") or 0
 
     return KVCachePoolSnapshot(
         schema_version=SCHEMA_VERSION,
@@ -458,7 +470,7 @@ def build_kv_cache_pool_snapshot(
         num_kv_buffers=num_kv_buffers,
         page_size_bytes=page_size_bytes,
         block_size_bytes=block_size_bytes,
-        total_blocks=_int_attr(manager, "num_blocks") or 0,
+        total_blocks=total_blocks,
         available_blocks=available_blocks,
         allocated_blocks=allocated_blocks,
         reserved_blocks=reserved_blocks,
@@ -467,7 +479,7 @@ def build_kv_cache_pool_snapshot(
         reserved_bytes=reserved_blocks * bytes_per_block,
         null_block_reserved=getattr(manager, "null_block", None) is not None,
         virtual_per_layer_bytes=virtual_per_layer_bytes,
-        virtual_total_bytes=virtual_per_layer_bytes * num_layers,
+        virtual_total_bytes=virtual_total_bytes,
         mapped_bytes=mapped_bytes,
         total_pages=total_pages,
         free_pages=free_pages,
@@ -493,6 +505,14 @@ def build_kv_cache_pool_snapshot(
         lifecycle_error=(str(lifecycle_error) if lifecycle_error is not None else None),
         reserved_mapped_bytes=reserved_mapped_bytes,
         total_mapped_bytes=total_mapped_bytes,
+        physical_virtual_ratio=_ratio(total_mapped_bytes, virtual_total_bytes),
+        page_utilization=_ratio(inuse_pages, total_pages),
+        block_utilization=_ratio(allocated_blocks, total_blocks),
+        physical_free_bytes=(
+            effective_free_pages * page_bundle_bytes
+            if effective_free_pages is not None
+            else None
+        ),
     )
 
 
